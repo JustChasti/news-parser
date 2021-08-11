@@ -1,0 +1,49 @@
+version: '3'
+
+volumes:
+  news_parser:
+
+services:
+
+  bot:
+    build:
+      context: .
+      dockerfile: bot/Dockerfile
+    image: bot
+    container_name: bot
+    env_file:
+      - .env
+    restart: always
+    tty: True
+    working_dir: /bot
+    networks:
+      - parser_network
+
+  pg_db:
+    image: postgres
+    restart: unless-stopped
+    container_name: ${POSTGRES_HOST}
+    env_file:
+      - .env
+    ports:
+      - "0.0.0.0:5432:5432"
+    networks:
+      - parser_network
+
+  parser:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: parser
+    container_name: parser
+    env_file:
+      - .env
+    restart: always
+    tty: True
+    working_dir: /parser
+    networks:
+      - parser_network
+
+networks:
+  parser_network:
+    driver: bridge
