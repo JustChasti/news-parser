@@ -1,6 +1,8 @@
 import datetime
 import requests
 import time
+import json
+from threading import Thread
 
 from loguru import logger
 from bs4 import BeautifulSoup
@@ -19,10 +21,12 @@ def parse_page_custom(link, title=None, text=None, publish_date=None):
     if session.query(db.News).filter(db.News.link == link).first():
         session.close()
         raise DuplicateNews('This link already in database')
-
-    article = Article(link, language='ru')
-    article.download()
-    article.parse()
+    try:
+        article = Article(link, language='ru')
+        article.download()
+        article.parse()
+    except Exception as e:
+        logger.warning('i cant download the article')
     _article = {
         "link": link,
         "title": title if title else article.title,
@@ -36,88 +40,18 @@ def parse_page_custom(link, title=None, text=None, publish_date=None):
     logger.info('Page parsed')
 
 
-def parse_page(link, category):
-    article = Article(link, language='ru')
-    article.download()
-    article.parse()
-    flag = 0
-    if category == 1:
-        if article.publish_date:
-            session = db.Session()
-            news = session.query(db.News).filter(db.News.link == link).first()
-            if not news:
-                session.add(db.News(link=link, title=article.title,
-                            text=article.text,
-                            publish_date=article.publish_date.date(),
-                            parsed_date=datetime.datetime.now()))
-                session.commit()
-            else:
-                flag = 1
-            session.close()
-            logger.info('Page parsed')
-        else:
-            logger.exception("Date Error")
-    elif category == 2:
-        page = requests.get(link).text
-        soup = BeautifulSoup(page, "html.parser")
-        body = soup.find('div', {"class": "text"})
-        text = ''
-        try:
-            elements = body.find_all('p')
-            for element in elements:
-                text += element.text
-            session = db.Session()
-            news = session.query(db.News).filter(db.News.link == link).first()
-            if not news:
-                if article.publish_date:
-                    session.add(db.News(link=link, title=article.title,
-                                text=text,
-                                publish_date=article.publish_date.date(),
-                                parsed_date=datetime.datetime.now()))
-                    session.commit()
-                else:
-                    date = link.strip('https://www.moskva-tyt.ru/news/')[:8]
-                    date = datetime.datetime.strptime(date, "%Y%m%d").date()
-                    session.add(db.News(link=link, title=article.title,
-                                text=text,
-                                publish_date=date,
-                                parsed_date=datetime.datetime.now()))
-                    session.commit()
-            else:
-                flag = 1
-            session.close()
-            logger.info('Page parsed')
-        except Exception as e:
-            logger.warning('Cant parse page')
-    elif category == 3:
-        print(article.title)
-        print(article.text)
-        print(article.publish_date.date())
-    else:
-        publish_date = category
-        session = db.Session()
-        news = session.query(db.News).filter(db.News.link == link).first()
-        if not news:
-            session.add(db.News(link=link, title=article.title,
-                        text=article.text,
-                        publish_date=publish_date,
-                        parsed_date=datetime.datetime.now()))
-            session.commit()
-        else:
-            flag = 1
-        session.close()
-        logger.info('Page parsed')
-    return flag
-
-
 def parse_msknews():
-    page = requests.get('http://msk-news.net/').text
-    soup = BeautifulSoup(page, "html.parser")
-    sitehead = soup.find('div', {"id": "menu"})
-    categories = sitehead.find_all('a')
-    for category in categories:
-        parse_msknews_category(category['href'])
-    logger.info('Site parsed')
+    try:
+        page = requests.get('http://msk-news.net/').text
+        soup = BeautifulSoup(page, "html.parser")
+        sitehead = soup.find('div', {"id": "menu"})
+        categories = sitehead.find_all('a')
+        for category in categories:
+            parse_msknews_category(category['href'])
+        logger.info('Site parsed')
+    except Exception as e:
+        logger.exception(e)
+        logger.warning(' Вероятно на сайте произошло обновление, или ваш ip был заблокирован')
 
 
 def parse_msknews_category(url):
@@ -162,62 +96,75 @@ def parse_msknews_category(url):
 
 
 def parse_msknovosti():
-    page = requests.get('https://msknovosti.ru/').text
-    soup = BeautifulSoup(page, "html.parser")
-    sitehead = soup.find('div', {"class": "menu-main-container"})
-    categories = sitehead.find_all('a')
-    for category in categories:
-        parse_msknovosti_category(category['href'], 1, 0, 0)
-    logger.info('Site parsed')
-
-
-def parse_msknovosti_category(url, count, maxcount, counter):
-    if count == 1:
-        page = requests.get(url).text
+    try:
+        page = requests.get('https://msknovosti.ru/').text
         soup = BeautifulSoup(page, "html.parser")
-        element = soup.find('a', {"class": "page-numbers"})
-        maxcount = int(element.find_next_sibling("a").text)
-    else:
+        sitehead = soup.find('div', {"class": "menu-main-container"})
+        categories = sitehead.find_all('a')
+        for category in categories:
+            parse_msknovosti_category(category['href'])
+        logger.info('Site parsed')
+    except Exception as e:
+        logger.exception(e)
+        logger.warning(' Вероятно на сайте произошло обновление, или ваш ip был заблокирован')
+
+
+def parse_msknovosti_category(url):
+    count = 1
+    deep_counter = 0
+    page = requests.get(url).text
+    soup = BeautifulSoup(page, "html.parser")
+    element = soup.find('a', {"class": "page-numbers"})
+    maxcount = int(element.find_next_sibling("a").text)
+    Parsing_flag = True
+    while count <= maxcount and deep_counter < config.max_deep_cat and Parsing_flag:
+        count += 1
+        column = soup.find_all('div', {"class": "post-card post-card--vertical w-animate"})
+        flag = 0
+        for element in column:
+            deep_counter += 1
+            try:
+                parse_page_custom(element.find('a')['href'])
+            except DuplicateNews as e:
+                logger.warning(e)
+                Parsing_flag = False
+                break
         page = requests.get(url + '/page/' + str(count)).text
         soup = BeautifulSoup(page, "html.parser")
-    count += 1
-    column = soup.find_all('div', {"class": "post-card post-card--vertical w-animate"})
-    flag = 0
-    for element in column:
-        counter += 1
-        result = parse_page(element.find('a')['href'], 1)
-        if result == 1:
-            flag = 1
-    if flag == 0 and count <= maxcount and counter < config.max_deep_cat:
-        parse_msknovosti_category(url, count, maxcount, counter)
-    else:
-        logger.info('Category parsed')
+    logger.info('Category parsed')
 
 
 def parse_mskiregion():
-    flag = 0
-    page_num = 1
-    counter = 0
-    while flag == 0 and counter < config.max_deep:
-        if page_num == 1:
-            page = requests.get('https://msk.inregiontoday.ru/?cat=1').text
-        else:
-            page = requests.get('https://msk.inregiontoday.ru/?cat=1&paged='
-                                + str(page_num)).text
-        page_num += 1
-        soup = BeautifulSoup(page, "html.parser")
-        page_counter = 1
-        titels = soup.find_all('h2', {"class": "entry-title"})
-        if not titels:
-            flag = 1
-        else:
-            for title in titels:
-                counter += 1
-                link = title.find('a')
-                result = parse_page(link['href'], 1)
-                if result == 1:
-                    flag = 1
-    logger.info('Site parsed')
+    try:
+        Parsing_flag = True
+        page_num = 1
+        deep_counter = 0
+        while Parsing_flag and deep_counter < config.max_deep:
+            if page_num == 1:
+                page = requests.get('https://msk.inregiontoday.ru/?cat=1').text
+            else:
+                page = requests.get('https://msk.inregiontoday.ru/?cat=1&paged='
+                                    + str(page_num)).text
+            page_num += 1
+            soup = BeautifulSoup(page, "html.parser")
+            page_counter = 1
+            titels = soup.find_all('h2', {"class": "entry-title"})
+            if not titels:
+                flag = 1
+            else:
+                for title in titels:
+                    deep_counter += 1
+                    link = title.find('a')
+                    try:
+                        parse_page_custom(link['href'])
+                    except DuplicateNews as e:
+                        logger.warning(e)
+                        Parsing_flag = False
+                        break
+        logger.info('Site parsed')
+    except Exception as e:
+        logger.exception(e)
+        logger.warning(' Вероятно на сайте произошло обновление, или ваш ip был заблокирован')
 
 
 def convert_date(post_date):
@@ -235,97 +182,151 @@ def convert_date(post_date):
 
 
 def parse_molnet():
-    flag = 0
-    page_num = 1
-    counter = 0
-    while flag == 0 and counter < config.max_deep:
-        if page_num == 1:
-            page = requests.get('https://www.molnet.ru/mos/ru/news').text
-        else:
-            page = requests.get('https://www.molnet.ru/mos/ru/news?page='
-                                + str(page_num)).text
-        page_num += 1
-        soup = BeautifulSoup(page, "html.parser")
-        page_counter = 1
-        column = soup.find('div', {"class": "l-col__inner"})
-        active = column.find('div', {"class": "rubric-prelist news"})
-        if not active:
-            flag = 1
-        else:
-            links = []
-            news = column.find_all('a', {"class": "link-wr"})
-            for element in news:
-                post_date = element.find('span',
-                                         {"class": "prelist-date"}).text
-                links.append(['https://www.molnet.ru' + element['href'],
-                             convert_date(post_date)])
-
-            news = column.find_all('li', {"class": "itemlist__item"})
-            for element in news:
-                link = element.find('a', {"class": "itemlist__link"})['href']
-                try:
+    try:
+        Parsing_flag = True
+        page_num = 1
+        deep_counter = 0
+        while Parsing_flag and deep_counter < config.max_deep:
+            if page_num == 1:
+                page = requests.get('https://www.molnet.ru/mos/ru/news').text
+            else:
+                page = requests.get('https://www.molnet.ru/mos/ru/news?page='
+                                    + str(page_num)).text
+            page_num += 1
+            soup = BeautifulSoup(page, "html.parser")
+            page_counter = 1
+            column = soup.find('div', {"class": "l-col__inner"})
+            active = column.find('div', {"class": "rubric-prelist news"})
+            if not active:
+                Parsing_flag = False
+            else:
+                links = []
+                news = column.find_all('a', {"class": "link-wr"})
+                for element in news:
                     post_date = element.find('span',
-                                             {"class": "itemlist__date"}).text
-                except Exception as e:
-                    break
-                links.append(['https://www.molnet.ru' + link,
-                             convert_date(post_date)])
+                                            {"class": "prelist-date"}).text
+                    links.append(['https://www.molnet.ru' + element['href'],
+                                 convert_date(post_date)])
 
-            for link in links:
-                counter += 1
-                try:
-                    result = parse_page(link[0], link[1])
-                    if result == 1:
-                        flag = 1
-                except:
-                    logger.warning('Cant parse page')
-    logger.info('Site parsed')
+                news = column.find_all('li', {"class": "itemlist__item"})
+                for element in news:
+                    link = element.find('a', {"class": "itemlist__link"})['href']
+                    try:
+                        post_date = element.find('span',
+                                                {"class": "itemlist__date"}).text
+                    except Exception as e:
+                        break
+                    links.append(['https://www.molnet.ru' + link,
+                                 convert_date(post_date)])
+
+                for link in links:
+                    deep_counter += 1
+                    try:
+                        parse_page_custom(link[0], publish_date=link[1])
+                    except DuplicateNews as e:
+                        logger.warning(e)
+                        Parsing_flag = False
+                        break
+        logger.info('Site parsed')
+    except Exception as e:
+        logger.exception(e)
+        logger.warning(' Вероятно на сайте произошло обновление, или ваш ip был заблокирован')
 
 
-def parse_moskvatyt(): #с ним аккуратнее - блочит
-    lower_st_date = '20100301'
-    flag = 0
-    now_date = datetime.date.today()
-    counter = 0
-    page_num = now_date.strftime('%Y%m%d')
-    while flag == 0 and page_num != lower_st_date and counter < config.max_deep:
-        if now_date == datetime.datetime.now().date():
-            page = requests.get('https://www.moskva-tyt.ru/news/').text
-        else:
-            page = requests.get('https://www.moskva-tyt.ru/news/'
-                                + str(page_num) + '.html').text
-        now_date = now_date - datetime.timedelta(days=1)
+def parse_moskvatyt():
+    try:
+        lower_st_date = '20100301'
+        Parsing_flag = True
+        now_date = datetime.date.today()
+        deep_counter = 0
         page_num = now_date.strftime('%Y%m%d')
-        soup = BeautifulSoup(page, "html.parser")
-        news = soup.find_all('div', {"class": "next"})
-        if not news:
-            logger.warning('Something wrong')
-            flag = 1
-        else:
-            for element in news:
-                link = element.find('a')
-                counter += 1
-                result = parse_page('https://www.moskva-tyt.ru/'+link['href'], 2)
-                if result == 1:
-                    flag = 1
-    logger.info('Site parsed')
+        while Parsing_flag and page_num != lower_st_date and deep_counter < config.max_deep:
+            if now_date == datetime.datetime.now().date():
+                page = requests.get('https://www.moskva-tyt.ru/news/').text
+            else:
+                page = requests.get('https://www.moskva-tyt.ru/news/'
+                                    + str(page_num) + '.html').text
+            now_date = now_date - datetime.timedelta(days=1)
+            page_num = now_date.strftime('%Y%m%d')
+            soup = BeautifulSoup(page, "html.parser")
+            news = soup.find_all('div', {"class": "next"})
+            if not news:
+                logger.warning('Something wrong')
+                flag = 1
+            else:
+                for element in news:
+                    link = element.find('a')
+                    deep_counter += 1
+                    try:
+                        moskvatytpage('https://www.moskva-tyt.ru/'+link['href'])
+                    except DuplicateNews as e:
+                        logger.warning(e)
+                        Parsing_flag = False
+                        break
+        logger.info('Site parsed')
+    except Exception as e:
+        logger.exception(e)
+        logger.warning(' Вероятно на сайте произошло обновление, или ваш ip был заблокирован')
+
+
+def moskvatytpage(link):
+    page = requests.get(link).text
+    soup = BeautifulSoup(page, "html.parser")
+    body = soup.find('div', {"class": "text"})
+    text = ''
+    elements = body.find_all('p')
+    for element in elements:
+        text += element.text
+    session = db.Session()
+    news = session.query(db.News).filter(db.News.link == link).first()
+    date = link.strip('https://www.moskva-tyt.ru/news/')[:8]
+    date = datetime.datetime.strptime(date, "%Y%m%d").date()
+    parse_page_custom(link, text=text, publish_date=date)
+    session.close()
 
 
 def parse_mn():
-    page = requests.get('https://www.mn.ru/news').text
-    soup = BeautifulSoup(page, "html.parser")
-    news = soup.find_all('span', {"class": "article_socials-copy"})
-    print(soup)
-    logger.info('I cant parse it')
+    try:
+        Parsing_flag = True
+        deep_counter = 0
+        count = 1
+        while Parsing_flag and deep_counter < config.max_deep:
+            link = 'https://www.mn.ru/api/v1/articles/more?page_size=5&page=' + str(count)
+            page = requests.get(link).json()
+            count += 1
+            for news in page["data"]:
+                deep_counter += 1
+                date = news["attributes"]['published_at'][:10]
+                publish_date = datetime.datetime.strptime(date, "%Y-%m-%d").date()
+                try:
+                    news_link = 'https://www.mn.ru' + news['links']['self']
+                    parse_page_custom(link=news_link,
+                                      title=news["attributes"]['title'],
+                                      text=news["attributes"]['description'],
+                                      publish_date=publish_date)
+                except DuplicateNews as e:
+                    logger.warning(e)
+                    Parsing_flag = False
+                    break
+        logger.info('Site parsed')
+    except Exception as e:
+        logger.exception(e)
+        logger.warning(' Вероятно на сайте произошло обновление, или ваш ip был заблокирован')
 
 
 if __name__ == "__main__":
-    pass
-    # parse_msknews()
-
-    # parse_msknovosti()
-    # parse_mskiregion()
-    # parse_molnet()
-    # parse_moskvatyt()
-    # logger.info('Parse loop ended')
-    # time.sleep(config.delay)
+    parser1 = Thread(target=parse_msknews)
+    parser2 = Thread(target=parse_msknovosti)
+    parser3 = Thread(target=parse_mskiregion)
+    parser4 = Thread(target=parse_molnet)
+    parser5 = Thread(target=parse_moskvatyt)
+    parser6 = Thread(target=parse_mn)
+    while True:
+        parser1.start()
+        parser2.start()
+        parser3.start()
+        parser4.start()
+        parser5.start()
+        parser6.start()
+        logger.info('Потоки запущены')
+        time.sleep(config.delay)
