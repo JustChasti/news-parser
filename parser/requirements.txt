@@ -1,0 +1,6 @@
+sqlalchemy
+psycopg2-binary
+loguru
+requests
+BeautifulSoup4
+newspaper3k

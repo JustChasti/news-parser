@@ -33,7 +33,7 @@ services:
   parser:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: parser/Dockerfile
     image: parser
     container_name: parser
     env_file:
