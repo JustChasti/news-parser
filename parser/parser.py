@@ -16,6 +16,10 @@ class DuplicateNews(Exception):
     pass
 
 
+class DoesntExistence(Exception):
+    pass
+
+
 def parse_page_custom(link, title=None, text=None, publish_date=None):
     session = db.Session()
     if session.query(db.News).filter(db.News.link == link).first():
@@ -47,104 +51,127 @@ def parse_msknews():
         sitehead = soup.find('div', {"id": "menu"})
         categories = sitehead.find_all('a')
         for category in categories:
-            parse_msknews_category(category['href'])
-        logger.info('Site parsed')
+            try:
+                parse_msknews_category(category['href'])
+            except DuplicateNews as e:
+                logger.info(e)
+                logger.info('Category parsed')
+            except DoesntExistence as e:
+                logger.warning(e)
+                logger.warning('Кончились страницы или блокировка ip')
+                logger.info('Category parsed')
     except Exception as e:
         logger.exception(e)
-        logger.warning(' Вероятно на сайте произошло обновление, или ваш ip был заблокирован')
+        logger.error('Вероятно на сайте произошло обновление')
 
 
 def parse_msknews_category(url):
     deep_counter = 0
-    page = requests.get(url).text
+    response = requests.get(url)
+    if response.status_code != 200:
+        raise DoesntExistence
+    page = response.text
     page_count = 1
     soup = BeautifulSoup(page, "html.parser")
     column = soup.find('div', {"class": "col2"})
 
     while column:
-        both_column_parsed = 0
         column = soup.find('div', {"class": "col2"})
         pages = column.find_all('div', {"class": "post_title"})
         for element in pages:
             page = element.find('a', {"class": "vh"})
             deep_counter += 1
-            try:
-                parse_page_custom(page['href'])
-            except DuplicateNews as e:
-                logger.warning(e)
-                both_column_parsed += 1
+            parse_page_custom(page['href'])
 
         column = soup.find('div', {"class": "col2 col2b"})
         pages = column.find_all('div', {"class": "post_title"})
         for element in pages:
             page = element.find('a', {"class": "vh"})
             deep_counter += 1
-            try:
-                parse_page_custom(page['href'])
-            except DuplicateNews as e:
-                logger.warning(e)
-                both_column_parsed += 1
+            parse_page_custom(page['href'])
 
-        if both_column_parsed < 2 and page_count <= 100 and deep_counter < config.max_deep_cat:
+        if page_count <= 100 and deep_counter < config.max_deep_cat:
             pass
         else:
             logger.info('Category parsed')
             break
         page_count += 1
-        page = requests.get(url + '/' + str(count)).text
+        response = requests.get(url + '/' + str(count))
+        if response.status_code != 200:
+            raise DoesntExistence
+        page = response.text
         soup = BeautifulSoup(page, "html.parser")
 
 
 def parse_msknovosti():
     try:
-        page = requests.get('https://msknovosti.ru/').text
+        response = requests.get('https://msknovosti.ru/')
+        if response.status_code != 200:
+            raise DoesntExistence
+        page = response.text
         soup = BeautifulSoup(page, "html.parser")
         sitehead = soup.find('div', {"class": "menu-main-container"})
         categories = sitehead.find_all('a')
         for category in categories:
             parse_msknovosti_category(category['href'])
         logger.info('Site parsed')
+    except DoesntExistence as e:
+        logger.warning(e)
+        logger.warning('блокировка ip')
     except Exception as e:
         logger.exception(e)
-        logger.warning(' Вероятно на сайте произошло обновление, или ваш ip был заблокирован')
+        logger.warning(' Вероятно на сайте произошло обновление')
 
 
 def parse_msknovosti_category(url):
     count = 1
     deep_counter = 0
-    page = requests.get(url).text
+    response = requests.get(url)
+    if response.status_code != 200:
+        raise DoesntExistence
+    page = response.text
     soup = BeautifulSoup(page, "html.parser")
     element = soup.find('a', {"class": "page-numbers"})
     maxcount = int(element.find_next_sibling("a").text)
-    Parsing_flag = True
-    while count <= maxcount and deep_counter < config.max_deep_cat and Parsing_flag:
-        count += 1
-        column = soup.find_all('div', {"class": "post-card post-card--vertical w-animate"})
-        flag = 0
-        for element in column:
-            deep_counter += 1
-            try:
+    try:
+        while count <= maxcount and deep_counter < config.max_deep_cat:
+            count += 1
+            column = soup.find_all('div', {"class": "post-card post-card--vertical w-animate"})
+            flag = 0
+            for element in column:
+                deep_counter += 1
                 parse_page_custom(element.find('a')['href'])
-            except DuplicateNews as e:
-                logger.warning(e)
-                Parsing_flag = False
-                break
-        page = requests.get(url + '/page/' + str(count)).text
-        soup = BeautifulSoup(page, "html.parser")
-    logger.info('Category parsed')
+            response = requests.get(url + '/page/' + str(count))
+            if response.status_code != 200:
+                raise DoesntExistence
+            page = response.text
+            soup = BeautifulSoup(page, "html.parser")
+    except DuplicateNews as e:
+        logger.info(e)
+        logger.info('Category parsed')
+    except DoesntExistence as e:
+        logger.warning(e)
+        logger.warning('Кончились страницы или блокировка ip')
+        logger.info('Category parsed')
+    except Exception as e:
+        logger.exception(e)
+        logger.error('Вероятно на сайте произошло обновление')
+    
 
 
 def parse_mskiregion():
     try:
-        Parsing_flag = True
         page_num = 1
         deep_counter = 0
-        while Parsing_flag and deep_counter < config.max_deep:
+        while deep_counter < config.max_deep:
             if page_num == 1:
-                page = requests.get('https://msk.inregiontoday.ru/?cat=1').text
+                link = 'https://msk.inregiontoday.ru/?cat=1'
             else:
-                page = requests.get('https://msk.inregiontoday.ru/?cat=1&paged='
-                                    + str(page_num)).text
+                link = f'https://msk.inregiontoday.ru/?cat=1&paged={page_num}'
+            response = requests.get(link)
+            if response.status_code != 200:
+                raise DoesntExistence
+            page = response.text
             page_num += 1
             soup = BeautifulSoup(page, "html.parser")
             page_counter = 1
@@ -155,16 +182,19 @@ def parse_mskiregion():
                 for title in titels:
                     deep_counter += 1
                     link = title.find('a')
-                    try:
-                        parse_page_custom(link['href'])
-                    except DuplicateNews as e:
-                        logger.warning(e)
-                        Parsing_flag = False
-                        break
+                    parse_page_custom(link['href'])
+    
+        logger.info('Site parsed')
+    except DuplicateNews as e:
+        logger.info(e)
+        logger.info('Site parsed')
+    except DoesntExistence as e:
+        logger.warning(e)
+        logger.warning('Кончились страницы или блокировка ip')
         logger.info('Site parsed')
     except Exception as e:
         logger.exception(e)
-        logger.warning(' Вероятно на сайте произошло обновление, или ваш ip был заблокирован')
+        logger.error('Вероятно на сайте произошло обновление')
 
 
 def convert_date(post_date):
@@ -183,22 +213,24 @@ def convert_date(post_date):
 
 def parse_molnet():
     try:
-        Parsing_flag = True
         page_num = 1
         deep_counter = 0
-        while Parsing_flag and deep_counter < config.max_deep:
+        while deep_counter < config.max_deep:
             if page_num == 1:
-                page = requests.get('https://www.molnet.ru/mos/ru/news').text
+                link = 'https://www.molnet.ru/mos/ru/news'
             else:
-                page = requests.get('https://www.molnet.ru/mos/ru/news?page='
-                                    + str(page_num)).text
+                link = f'https://www.molnet.ru/mos/ru/news?page={page_num}'
+            response = requests.get(link)
+            if response.status_code != 200:
+                raise DoesntExistence
+            page = response.text
             page_num += 1
             soup = BeautifulSoup(page, "html.parser")
             page_counter = 1
             column = soup.find('div', {"class": "l-col__inner"})
             active = column.find('div', {"class": "rubric-prelist news"})
             if not active:
-                Parsing_flag = False
+                raise DoesntExistence
             else:
                 links = []
                 news = column.find_all('a', {"class": "link-wr"})
@@ -213,7 +245,7 @@ def parse_molnet():
                     link = element.find('a', {"class": "itemlist__link"})['href']
                     try:
                         post_date = element.find('span',
-                                                {"class": "itemlist__date"}).text
+                                                 {"class": "itemlist__date"}).text
                     except Exception as e:
                         break
                     links.append(['https://www.molnet.ru' + link,
@@ -221,31 +253,38 @@ def parse_molnet():
 
                 for link in links:
                     deep_counter += 1
-                    try:
-                        parse_page_custom(link[0], publish_date=link[1])
-                    except DuplicateNews as e:
-                        logger.warning(e)
-                        Parsing_flag = False
-                        break
+                    parse_page_custom(link[0], publish_date=link[1])
+
+        logger.info('Site parsed')
+    except DuplicateNews as e:
+        logger.info(e)
+        logger.info('Site parsed')
+    except DoesntExistence as e:
+        logger.warning(e)
+        logger.warning('Кончились страницы или блокировка ip')
         logger.info('Site parsed')
     except Exception as e:
         logger.exception(e)
-        logger.warning(' Вероятно на сайте произошло обновление, или ваш ip был заблокирован')
+        logger.error('Вероятно на сайте произошло обновление')
 
 
 def parse_moskvatyt():
     try:
         lower_st_date = '20100301'
-        Parsing_flag = True
         now_date = datetime.date.today()
         deep_counter = 0
         page_num = now_date.strftime('%Y%m%d')
-        while Parsing_flag and page_num != lower_st_date and deep_counter < config.max_deep:
+        while page_num != lower_st_date and deep_counter < config.max_deep:
             if now_date == datetime.datetime.now().date():
-                page = requests.get('https://www.moskva-tyt.ru/news/').text
+                link = 'https://www.moskva-tyt.ru/news/'
             else:
-                page = requests.get('https://www.moskva-tyt.ru/news/'
-                                    + str(page_num) + '.html').text
+                link = f'https://www.moskva-tyt.ru/news/{page_num}.html'
+
+            response = requests.get(link)
+            if response.status_code != 200:
+                raise DoesntExistence(f'Page with page: {count} doesnt exist')
+
+            page = response.text
             now_date = now_date - datetime.timedelta(days=1)
             page_num = now_date.strftime('%Y%m%d')
             soup = BeautifulSoup(page, "html.parser")
@@ -257,16 +296,18 @@ def parse_moskvatyt():
                 for element in news:
                     link = element.find('a')
                     deep_counter += 1
-                    try:
-                        moskvatytpage('https://www.moskva-tyt.ru/'+link['href'])
-                    except DuplicateNews as e:
-                        logger.warning(e)
-                        Parsing_flag = False
-                        break
+                    moskvatytpage('https://www.moskva-tyt.ru/'+link['href'])
+        logger.info('Site parsed')
+    except DuplicateNews as e:
+        logger.info(e)
+        logger.info('Site parsed')
+    except DoesntExistence as e:
+        logger.warning(e)
+        logger.warning('Кончились страницы или блокировка ip')
         logger.info('Site parsed')
     except Exception as e:
         logger.exception(e)
-        logger.warning(' Вероятно на сайте произошло обновление, или ваш ip был заблокирован')
+        logger.error('Вероятно на сайте произошло обновление')
 
 
 def moskvatytpage(link):
@@ -287,31 +328,35 @@ def moskvatytpage(link):
 
 def parse_mn():
     try:
-        Parsing_flag = True
         deep_counter = 0
         count = 1
-        while Parsing_flag and deep_counter < config.max_deep:
-            link = 'https://www.mn.ru/api/v1/articles/more?page_size=5&page=' + str(count)
-            page = requests.get(link).json()
+        while deep_counter < config.max_deep:
+            link = f'https://www.mn.ru/api/v1/articles/more?page_size=5&page={count}'
+            response = requests.get(link)
+            if response.status_code != 200:
+                raise DoesntExistence(f'Page with page: {count} doesnt exist')
+            page = response.json()
             count += 1
             for news in page["data"]:
                 deep_counter += 1
                 date = news["attributes"]['published_at'][:10]
                 publish_date = datetime.datetime.strptime(date, "%Y-%m-%d").date()
-                try:
-                    news_link = 'https://www.mn.ru' + news['links']['self']
-                    parse_page_custom(link=news_link,
-                                      title=news["attributes"]['title'],
-                                      text=news["attributes"]['description'],
-                                      publish_date=publish_date)
-                except DuplicateNews as e:
-                    logger.warning(e)
-                    Parsing_flag = False
-                    break
+                news_link = 'https://www.mn.ru' + news['links']['self']
+                parse_page_custom(link=news_link,
+                                  title=news["attributes"]['title'],
+                                  text=news["attributes"]['description'],
+                                  publish_date=publish_date)
+        logger.info('Site parsed')
+    except DuplicateNews as e:
+        logger.info(e)
+        logger.info('Site parsed')
+    except DoesntExistence as e:
+        logger.warning(e)
+        logger.warning('Кончились страницы или блокировка ip')
         logger.info('Site parsed')
     except Exception as e:
         logger.exception(e)
-        logger.warning(' Вероятно на сайте произошло обновление, или ваш ip был заблокирован')
+        logger.error('Вероятно на сайте произошло обновление')
 
 
 if __name__ == "__main__":
